@@ -51,23 +51,37 @@ export default function LgpdPanel() {
     if (!user) return;
     setDeleting(true);
 
-    await supabase.from("audit_logs").insert({
-      user_id: user.id,
-      action: "request_data_deletion",
-      resource_type: "lgpd",
-      details: {},
-    });
+    try {
+      await supabase.from("audit_logs").insert({
+        user_id: user.id,
+        action: "request_data_deletion",
+        resource_type: "lgpd",
+        details: { full_deletion: true },
+      });
 
-    // Delete user data (cascades handle most)
-    await supabase.from("profiles").delete().eq("user_id", user.id);
-    await supabase.from("user_roles").delete().eq("user_id", user.id);
-    await supabase.from("lgpd_consents").delete().eq("user_id", user.id);
-    await supabase.from("notifications").delete().eq("user_id", user.id);
+      // Call the RPC function for full account deletion
+      const { error } = await (supabase.rpc as any)("delete_own_user");
 
-    toast.success("Seus dados foram marcados para exclusão.");
-    setDeleting(false);
-    setDeleteOpen(false);
-    signOut();
+      if (error) {
+        // Fallback or specific error handling
+        console.error("Error calling delete_own_user RPC:", error);
+
+        // Try manual partial deletion as fallback if RPC fails
+        await supabase.from("profiles").delete().eq("user_id", user.id);
+        await supabase.from("user_roles").delete().eq("user_id", user.id);
+
+        toast.error("Erro ao excluir conta completamente. Seus dados de perfil foram removidos, mas o acesso ainda pode estar ativo.");
+      } else {
+        toast.success("Sua conta e todos os seus dados foram excluídos permanentemente.");
+      }
+    } catch (err) {
+      console.error("Unexpected error during deletion:", err);
+      toast.error("Ocorreu um erro inesperado ao excluir sua conta.");
+    } finally {
+      setDeleting(false);
+      setDeleteOpen(false);
+      signOut();
+    }
   };
 
   return (

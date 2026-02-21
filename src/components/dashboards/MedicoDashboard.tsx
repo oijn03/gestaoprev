@@ -23,7 +23,27 @@ export function MedicoDashboard() {
         pending: pending || 0,
       });
     };
+
     fetchStats();
+
+    // Realtime subscription
+    const channel = supabase
+      .channel("medico-stats")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "case_requests", filter: `medico_id=eq.${user.id}` },
+        () => fetchStats()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "consultations", filter: `medico_id=eq.${user.id}` },
+        () => fetchStats()
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [user]);
 
   const cards = [

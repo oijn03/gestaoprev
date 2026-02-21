@@ -56,7 +56,13 @@ export default function AuthPage() {
       email,
       password,
       options: {
-        data: { full_name: fullName },
+        data: {
+          full_name: fullName,
+          role: role,
+          oab_number: role === "advogado" ? oabNumber : null,
+          crm_number: role !== "advogado" ? crmNumber : null,
+          specialization: role === "especialista" ? specialization : null
+        },
         emailRedirectTo: window.location.origin,
       },
     });
@@ -68,18 +74,8 @@ export default function AuthPage() {
     }
 
     if (data.user) {
-      // Insert role
-      await supabase.from("user_roles").insert({ user_id: data.user.id, role });
-
-      // Update profile with professional data
-      await supabase.from("profiles").update({
-        full_name: fullName,
-        oab_number: role === "advogado" ? oabNumber : null,
-        crm_number: role !== "advogado" ? crmNumber : null,
-        specialization: role === "especialista" ? specialization : null,
-      }).eq("user_id", data.user.id);
-
-      // LGPD consent
+      // LGPD consent (can be moved to trigger too if needed, but let's keep it here for now with better error handling)
+      // Actually, standard practice is triggers for core data.
       await supabase.from("lgpd_consents").insert({
         user_id: data.user.id,
         consent_type: "termos_uso_e_privacidade",

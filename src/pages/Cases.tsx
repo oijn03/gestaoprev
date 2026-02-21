@@ -5,13 +5,32 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Plus, FolderOpen, AlertTriangle, Clock, Search } from "lucide-react";
+import { Plus, FolderOpen, AlertTriangle, Clock, Search, Stethoscope, History, FileText, CheckCircle2, Lock } from "lucide-react";
 import { toast } from "sonner";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { addMinutes, isBefore, startOfMinute, format } from "date-fns";
+import { ptBR } from "date-fns/locale";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+
+interface TimelineEvent {
+  id: string;
+  type: 'creation' | 'request' | 'acceptance' | 'document';
+  title: string;
+  description: string;
+  date: string;
+  icon: any;
+}
 
 interface Case {
   id: string;
@@ -29,6 +48,7 @@ interface Case {
 const statusColors: Record<string, string> = {
   aberto: "bg-primary/10 text-primary",
   em_andamento: "bg-warning/10 text-warning",
+  aguardando_medico: "bg-warning/10 text-warning",
   aguardando_laudo: "bg-warning/10 text-warning",
   concluido: "bg-success/10 text-success",
   arquivado: "bg-muted text-muted-foreground",
@@ -42,10 +62,132 @@ const priorityColors: Record<string, string> = {
 
 export default function Cases() {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const [cases, setCases] = useState<Case[]>([]);
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [requestDialogOpen, setRequestDialogOpen] = useState(false);
+  const [selectedCase, setSelectedCase] = useState<Case | null>(null);
+  const [doctors, setDoctors] = useState<{ id: string; full_name: string }[]>([]);
+
   const [form, setForm] = useState({ title: "", patient_name: "", patient_cpf: "", process_number: "", description: "", priority: "normal", deadline: "" });
+  const [requestForm, setRequestForm] = useState({ medico_id: "", type: "prova_tecnica", deadline: "", description: "" });
+  const [editingRequestId, setEditingRequestId] = useState<string | null>(null);
+  const [currentRequestStatus, setCurrentRequestStatus] = useState<string | null>(null);
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [isTimelineOpen, setIsTimelineOpen] = useState(false);
+  const [docFiles, setDocFiles] = useState<Record<string, File | null>>({
+    identificacao: null,
+    endereco: null,
+    laudos: null,
+    exames: null,
+    receitas: null,
+  });
+
+  const fetchCaseHistory = async (caseId: string) => {
+    setIsTimelineOpen(true);
+    setTimeline([]);
+
+    try {
+      const [
+        { data: caseData },
+        { data: requests },
+        { data: consultations },
+        { data: docs }
+      ] = await Promise.all([
+        supabase.from("cases").select("*").eq("id", caseId).single(),
+        supabase.from("case_requests").select("*").eq("case_id", caseId),
+        supabase.from("consultations").select("*, case_requests!inner(case_id)").eq("case_requests.case_id", caseId),
+        supabase.from("documents").select("*").eq("case_id", caseId)
+      ]);
+
+      const events: TimelineEvent[] = [];
+
+      if (caseData) {
+        events.push({
+          id: `creation-${caseData.id}`,
+          type: 'creation',
+          title: 'Caso Criado',
+          description: `O advogado iniciou o caso "${caseData.title}"`,
+          date: caseData.created_at,
+          icon: FolderOpen
+        });
+      }
+
+      requests?.forEach(req => {
+        events.push({
+          id: `req-${req.id}`,
+          type: 'request',
+          title: 'Solicitação de Perícia',
+          description: `Solicitada prova técnica do tipo "${req.type.replace(/_/g, ' ')}"`,
+          date: req.created_at,
+          icon: Stethoscope
+        });
+      });
+
+      consultations?.forEach(con => {
+        events.push({
+          id: `con-${con.id}`,
+          type: 'acceptance',
+          title: 'Solicitação Aceita',
+          description: `O médico aceitou o caso. Status: ${con.status}`,
+          date: con.created_at,
+          icon: CheckCircle2
+        });
+      });
+
+      docs?.forEach(doc => {
+        events.push({
+          id: `doc-${doc.id}`,
+          type: 'document',
+          title: 'Documento Anexado',
+          description: `Arquivo "${doc.file_name}" enviado (${doc.description || 'Geral'})`,
+          date: doc.created_at,
+          icon: FileText
+        });
+      });
+
+      setTimeline(events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+    } catch (error) {
+      console.error("Erro ao buscar histórico:", error);
+      toast.error("Não foi possível carregar o histórico.");
+    }
+  };
+  const handleRequestAdjustment = async () => {
+    if (!editingRequestId) return;
+
+    try {
+      const { error } = await supabase
+        .from("case_requests")
+        .update({ status: "solicitando_ajuste" })
+        .eq("id", editingRequestId);
+
+      if (error) throw error;
+
+      toast.success("Solicitação de alteração enviada ao médico!");
+      setCurrentRequestStatus("solicitando_ajuste");
+      fetchCases();
+    } catch (error: any) {
+      toast.error("Erro ao solicitar alteração: " + error.message);
+    }
+  };
+
+  const isLocked = currentRequestStatus !== null &&
+    currentRequestStatus !== "pendente" &&
+    currentRequestStatus !== "em_ajuste";
+
+  const docCategories = [
+    { id: "identificacao", label: "Documento de Identificação (com CPF)", required: true },
+    { id: "endereco", label: "Comprovante de Endereço", required: true },
+    { id: "laudos", label: "Laudos/Atestados Anteriores", required: false },
+    { id: "exames", label: "Exames Prévios", required: false },
+    { id: "receitas", label: "Receitas Prévias", required: false },
+  ];
+
+  const canSubmit = requestForm.medico_id &&
+    requestForm.deadline &&
+    docFiles.identificacao &&
+    docFiles.endereco;
 
   const fetchCases = async () => {
     if (!user) return;
@@ -53,7 +195,35 @@ export default function Cases() {
     if (data) setCases(data as Case[]);
   };
 
-  useEffect(() => { fetchCases(); }, [user]);
+  const fetchDoctors = async () => {
+    try {
+      const { data: roleRecords } = await supabase
+        .from("user_roles")
+        .select("user_id")
+        .eq("role", "medico_generalista");
+
+      if (!roleRecords || roleRecords.length === 0) {
+        setDoctors([]);
+        return;
+      }
+
+      const { data: profileRecords } = await supabase
+        .from("profiles")
+        .select("user_id, full_name")
+        .in("user_id", roleRecords.map(r => r.user_id));
+
+      if (profileRecords) {
+        setDoctors(profileRecords.map(d => ({ id: d.user_id, full_name: d.full_name })));
+      }
+    } catch (err) {
+      console.error("Erro ao buscar médicos:", err);
+    }
+  };
+
+  useEffect(() => {
+    fetchCases();
+    fetchDoctors();
+  }, [user]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -73,6 +243,150 @@ export default function Cases() {
     setDialogOpen(false);
     setForm({ title: "", patient_name: "", patient_cpf: "", process_number: "", description: "", priority: "normal", deadline: "" });
     fetchCases();
+  };
+
+  const handleOpenEditRequest = async (c: Case) => {
+    setSelectedCase(c);
+    setEditingRequestId(null);
+    setCurrentRequestStatus(null);
+    setRequestForm({ medico_id: "", type: "prova_tecnica", deadline: "", description: "" });
+    setDocFiles({ identificacao: null, endereco: null, laudos: null, exames: null, receitas: null });
+
+    const { data: request, error } = await supabase
+      .from("case_requests")
+      .select("*")
+      .eq("case_id", c.id)
+      .maybeSingle();
+
+    if (request) {
+      setEditingRequestId(request.id);
+      setCurrentRequestStatus(request.status);
+      setRequestForm({
+        medico_id: request.medico_id || "",
+        type: request.type,
+        deadline: request.deadline || "",
+        description: request.description || "",
+      });
+    }
+
+    setRequestDialogOpen(true);
+  };
+
+  const createRequestMutation = useMutation({
+    mutationFn: async (data: typeof requestForm & { case_id: string }) => {
+      let request;
+
+      if (editingRequestId) {
+        // Update existing
+        const { data: updated, error: updateError } = await supabase
+          .from("case_requests")
+          .update({
+            medico_id: data.medico_id,
+            type: data.type,
+            deadline: data.deadline,
+            description: data.description,
+          })
+          .eq("id", editingRequestId)
+          .select()
+          .single();
+
+        if (updateError) throw updateError;
+        request = updated;
+      } else {
+        // Create new
+        const { data: created, error: reqError } = await supabase.from("case_requests").insert({
+          case_id: data.case_id,
+          advogado_id: user!.id,
+          medico_id: data.medico_id,
+          type: data.type,
+          status: "pendente",
+          deadline: data.deadline,
+          description: data.description,
+        }).select().single();
+
+        if (reqError) throw reqError;
+        request = created;
+      }
+
+      // 2. Upload documents (Only if new files were selected)
+      for (const [category, file] of Object.entries(docFiles)) {
+        if (!file) continue;
+
+        const fileExt = file.name.split('.').pop();
+        const fileName = `${data.case_id}/${category}_${Math.random().toString(36).slice(2)}.${fileExt}`;
+        const filePath = `documents/${fileName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("case-documents")
+          .upload(filePath, file);
+
+        if (uploadError) {
+          console.error(`Error uploading ${category}:`, uploadError);
+          continue; // Continue with other files even if one fails
+        }
+
+        // Create document record
+        await supabase.from("documents").insert({
+          case_id: data.case_id,
+          file_name: file.name,
+          file_path: filePath,
+          file_type: file.type,
+          file_size: file.size,
+          uploaded_by: user!.id,
+          description: category, // Map category to description since it doesn't exist as a field
+        });
+      }
+
+      // 3. Update case status
+      const { error: caseError } = await supabase
+        .from("cases")
+        .update({ status: "aguardando_medico" })
+        .eq("id", data.case_id);
+
+      if (caseError) throw caseError;
+
+      // 4. Audit log
+      await supabase.from("audit_logs").insert({
+        user_id: user!.id,
+        action: "SOLICITAR_PROVA_TECNICA",
+        resource_type: "case_requests",
+        resource_id: request.id,
+        details: { case_id: data.case_id, medico_id: data.medico_id }
+      });
+
+      return request;
+    },
+    onSuccess: () => {
+      toast.success("Solicitação enviada com sucesso!");
+      setRequestDialogOpen(false);
+      setRequestForm({ medico_id: "", type: "prova_tecnica", deadline: "", description: "" });
+      setDocFiles({ identificacao: null, endereco: null, laudos: null, exames: null, receitas: null });
+      fetchCases();
+    },
+    onError: (error: any) => {
+      toast.error("Erro ao enviar solicitação: " + error.message);
+    }
+  });
+
+  const handleCreateRequest = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedCase) return;
+
+    if (!requestForm.medico_id) {
+      toast.error("Selecione um médico");
+      return;
+    }
+
+    if (requestForm.deadline) {
+      const deadlineDate = new Date(requestForm.deadline);
+      const now = startOfMinute(new Date());
+      if (isBefore(deadlineDate, now)) {
+        toast.error("O prazo não pode ser uma data retroativa");
+        return;
+      }
+    }
+
+    createRequestMutation.mutate({ ...requestForm, case_id: selectedCase.id });
   };
 
   const filtered = cases.filter((c) =>
@@ -154,12 +468,13 @@ export default function Cases() {
                 <TableHead>Status</TableHead>
                 <TableHead>Prioridade</TableHead>
                 <TableHead className="hidden lg:table-cell">Prazo</TableHead>
+                <TableHead className="text-right">Ações</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                     <FolderOpen className="mx-auto mb-2 h-8 w-8" />
                     Nenhum caso encontrado
                   </TableCell>
@@ -191,12 +506,152 @@ export default function Cases() {
                       </span>
                     ) : "—"}
                   </TableCell>
+                  <TableCell className="text-right flex justify-end gap-2">
+                    <Button variant="ghost" size="sm" onClick={() => fetchCaseHistory(c.id)}>
+                      <History className="mr-2 h-4 w-4" />
+                      Ver Histórico
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => handleOpenEditRequest(c)}>
+                      <Stethoscope className="mr-2 h-4 w-4" />
+                      {c.status === "aberto" || c.status === "em_andamento" ? "Solicitar Prova" : "Ver/Editar Solicitação"}
+                    </Button>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         </CardContent>
       </Card>
+
+      <Dialog open={requestDialogOpen} onOpenChange={setRequestDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{editingRequestId ? "Ver/Editar Solicitação" : "Solicitar Prova Técnica"}</DialogTitle>
+            <DialogDescription>
+              {isLocked
+                ? "Esta solicitação está bloqueada para edição pois já foi aceita pelo médico."
+                : "Selecione um médico e defina o prazo para a perícia médica deste caso."}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleCreateRequest} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="medico-select" className="flex items-center">
+                Médico Generalista {isLocked && <Lock className="ml-2 h-3 w-3 text-muted-foreground" />}
+              </Label>
+              <Select value={requestForm.medico_id} onValueChange={(v) => setRequestForm({ ...requestForm, medico_id: v })} disabled={isLocked}>
+                <SelectTrigger id="medico-select"><SelectValue placeholder="Selecione um médico..." /></SelectTrigger>
+                <SelectContent>
+                  {doctors.map((doc) => (
+                    <SelectItem key={doc.id} value={doc.id}>{doc.full_name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="pericia-type" className="flex items-center">
+                Tipo de Perícia {isLocked && <Lock className="ml-2 h-3 w-3 text-muted-foreground" />}
+              </Label>
+              <Input id="pericia-type" value={requestForm.type} onChange={(e) => setRequestForm({ ...requestForm, type: e.target.value })} required placeholder="Ex: Prova Técnica Previdenciária" disabled={isLocked} />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="prazo-esperado" className="flex items-center">
+                Prazo Esperado {isLocked && <Lock className="ml-2 h-3 w-3 text-muted-foreground" />}
+              </Label>
+              <Input id="prazo-esperado" type="datetime-local" value={requestForm.deadline} onChange={(e) => setRequestForm({ ...requestForm, deadline: e.target.value })} required disabled={isLocked} />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="observacoes" className="flex items-center">
+                Observações {isLocked && <Lock className="ml-2 h-3 w-3 text-muted-foreground" />}
+              </Label>
+              <Textarea id="observacoes" value={requestForm.description} onChange={(e) => setRequestForm({ ...requestForm, description: e.target.value })} placeholder="Detalhes adicionais para o médico..." rows={3} disabled={isLocked} />
+            </div>
+
+            <div className="space-y-4 border-t pt-4">
+              <Label className="text-base font-semibold">Anexos Obrigatórios e Opcionais</Label>
+              <div className="grid gap-4 max-h-[300px] overflow-y-auto pr-2">
+                {docCategories.map((cat) => (
+                  <div key={cat.id} className="space-y-1.5 opacity-80">
+                    <Label htmlFor={`file-${cat.id}`} className="text-sm flex items-center">
+                      {cat.label} {cat.required && <span className="text-destructive">*</span>}
+                      {isLocked && <Lock className="ml-2 h-3 w-3 text-muted-foreground" />}
+                    </Label>
+                    <Input
+                      id={`file-${cat.id}`}
+                      type="file"
+                      accept=".pdf,.jpeg,.jpg,.png"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0] || null;
+                        setDocFiles({ ...docFiles, [cat.id]: file });
+                      }}
+                      className="cursor-pointer"
+                      disabled={isLocked}
+                    />
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground italic">
+                Formatos aceitos: PDF, JPEG, JPG, PNG.
+              </p>
+            </div>
+
+            <DialogFooter className="flex flex-col sm:flex-row gap-2">
+              {isLocked ? (
+                currentRequestStatus === "solicitando_ajuste" ? (
+                  <Button type="button" variant="outline" className="w-full" disabled>
+                    <Clock className="mr-2 h-4 w-4" />
+                    Aguardando Médico...
+                  </Button>
+                ) : (
+                  <Button type="button" className="w-full" onClick={handleRequestAdjustment}>
+                    <AlertTriangle className="mr-2 h-4 w-4" />
+                    Solicitar Alteração
+                  </Button>
+                )
+              ) : (
+                <Button type="submit" className="w-full min-h-[44px]" disabled={createRequestMutation.isPending || (!editingRequestId && !canSubmit)}>
+                  {createRequestMutation.isPending ? "Salvando..." : editingRequestId ? "Salvar Alterações" : "Enviar Solicitação"}
+                </Button>
+              )}
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <Sheet open={isTimelineOpen} onOpenChange={setIsTimelineOpen}>
+        <SheetContent className="overflow-y-auto sm:max-w-md">
+          <SheetHeader className="mb-6">
+            <SheetTitle>Histórico do Caso</SheetTitle>
+            <SheetDescription>
+              Linha do tempo de todas as ações realizadas.
+            </SheetDescription>
+          </SheetHeader>
+
+          <div className="relative space-y-8 before:absolute before:inset-0 before:ml-5 before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-300 before:to-transparent">
+            {timeline.length === 0 ? (
+              <p className="text-center text-muted-foreground py-10">Nenhum histórico disponível.</p>
+            ) : timeline.map((event) => (
+              <div key={event.id} className="relative flex items-start group">
+                <div className="flex items-center justify-center w-10 h-10 rounded-full border bg-background shadow-sm shrink-0 z-10">
+                  <event.icon className="h-5 w-5 text-primary" />
+                </div>
+                <div className="ml-4 space-y-1 pt-1">
+                  <div className="flex items-center justify-between gap-4">
+                    <h4 className="font-semibold text-sm leading-none">{event.title}</h4>
+                    <time className="text-xs text-muted-foreground whitespace-nowrap">
+                      {format(new Date(event.date), "dd/MM 'às' HH:mm", { locale: ptBR })}
+                    </time>
+                  </div>
+                  <p className="text-sm text-muted-foreground line-clamp-2">
+                    {event.description}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
