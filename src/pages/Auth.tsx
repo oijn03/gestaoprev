@@ -73,16 +73,7 @@ export default function AuthPage() {
       return;
     }
 
-    if (data.user) {
-      // LGPD consent (can be moved to trigger too if needed, but let's keep it here for now with better error handling)
-      // Actually, standard practice is triggers for core data.
-      await supabase.from("lgpd_consents").insert({
-        user_id: data.user.id,
-        consent_type: "termos_uso_e_privacidade",
-        accepted: true,
-        accepted_at: new Date().toISOString(),
-      });
-    }
+    // LGPD consent is now handled automatically by the database trigger on user creation
 
     setLoading(false);
     toast.success("Cadastro realizado! Verifique seu email para confirmar a conta.");
