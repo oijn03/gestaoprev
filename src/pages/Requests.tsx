@@ -118,7 +118,7 @@ export default function Requests() {
 
   const statusColors: Record<string, string> = {
     pendente: "bg-warning/10 text-warning",
-    em_agendamento: "bg-blue-500/10 text-blue-500",
+    em_agendamento: "bg-primary/10 text-primary",
     em_andamento: "bg-primary/10 text-primary",
     concluida: "bg-success/10 text-success",
     solicitando_ajuste: "bg-destructive/10 text-destructive font-bold animate-pulse",
