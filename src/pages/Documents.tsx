@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { FileText, Download } from "lucide-react";
+import { FileText, Download, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
@@ -15,20 +15,27 @@ interface Document {
   file_path: string;
   description: string | null;
   created_at: string;
+  // Bug #6 fix: joined from cases table
+  cases: { title: string } | null;
 }
 
 export default function Documents() {
   const { user } = useAuth();
-  const [documents, setDocuments] = useState<Document[]>([]);
 
-  useEffect(() => {
-    if (!user) return;
-    const fetch = async () => {
-      const { data } = await supabase.from("documents").select("*").order("created_at", { ascending: false });
-      if (data) setDocuments(data as Document[]);
-    };
-    fetch();
-  }, [user]);
+  const { data: documents, isLoading } = useQuery({
+    queryKey: ["documents", user?.id],
+    queryFn: async () => {
+      if (!user) return [];
+      const { data, error } = await supabase
+        .from("documents")
+        .select("*, cases(title)")
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      return data as Document[];
+    },
+    enabled: !!user,
+  });
 
   const handleDownload = async (doc: Document) => {
     const { data, error } = await supabase.storage.from("case-documents").download(doc.file_path);
@@ -58,6 +65,15 @@ export default function Documents() {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  if (isLoading) {
+    return (
+      <div className="flex h-64 flex-col items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <p className="mt-2 text-muted-foreground">Carregando documentos...</p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -70,6 +86,7 @@ export default function Documents() {
             <TableHeader>
               <TableRow>
                 <TableHead>Arquivo</TableHead>
+                <TableHead className="hidden md:table-cell">Caso</TableHead>
                 <TableHead className="hidden md:table-cell">Tipo</TableHead>
                 <TableHead className="hidden md:table-cell">Tamanho</TableHead>
                 <TableHead className="hidden lg:table-cell">Data</TableHead>
@@ -77,9 +94,9 @@ export default function Documents() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {documents.length === 0 ? (
+              {!documents || documents.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                     <FileText className="mx-auto mb-2 h-8 w-8" />
                     Nenhum documento
                   </TableCell>
@@ -87,6 +104,9 @@ export default function Documents() {
               ) : documents.map((d) => (
                 <TableRow key={d.id}>
                   <TableCell className="font-medium">{d.file_name}</TableCell>
+                  <TableCell className="hidden md:table-cell text-sm text-muted-foreground">
+                    {d.cases?.title || "—"}
+                  </TableCell>
                   <TableCell className="hidden md:table-cell">{d.file_type || "—"}</TableCell>
                   <TableCell className="hidden md:table-cell">{formatSize(d.file_size)}</TableCell>
                   <TableCell className="hidden lg:table-cell">{new Date(d.created_at).toLocaleDateString("pt-BR")}</TableCell>

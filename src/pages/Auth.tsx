@@ -20,6 +20,7 @@ const roleLabels: Record<AppRole, { label: string; icon: typeof Scale }> = {
 
 export default function AuthPage() {
   const [isLogin, setIsLogin] = useState(true);
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
@@ -30,6 +31,22 @@ export default function AuthPage() {
   const [lgpdConsent, setLgpdConsent] = useState(false);
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email) { toast.error("Informe seu email"); return; }
+    setLoading(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/auth`,
+    });
+    setLoading(false);
+    if (error) {
+      toast.error(error.message);
+    } else {
+      toast.success("Email de recuperao enviado! Verifique sua caixa de entrada.");
+      setIsForgotPassword(false);
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,11 +105,11 @@ export default function AuthPage() {
           </div>
           <CardTitle className="text-2xl">Gestão Previdenciária</CardTitle>
           <CardDescription>
-            {isLogin ? "Entre na sua conta" : "Crie sua conta profissional"}
+            {isForgotPassword ? "Recuperar senha" : isLogin ? "Entre na sua conta" : "Crie sua conta profissional"}
           </CardDescription>
         </CardHeader>
 
-        <form onSubmit={isLogin ? handleLogin : handleRegister}>
+        <form onSubmit={isForgotPassword ? handleForgotPassword : isLogin ? handleLogin : handleRegister}>
           <CardContent className="space-y-4">
             {!isLogin && (
               <>
@@ -150,10 +167,22 @@ export default function AuthPage() {
               <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required maxLength={255} />
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="password">Senha</Label>
-              <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} maxLength={72} />
-            </div>
+            {!isForgotPassword && (
+              <div className="space-y-2">
+                <Label htmlFor="password">Senha</Label>
+                <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} maxLength={72} />
+              </div>
+            )}
+
+            {isLogin && !isForgotPassword && (
+              <button
+                type="button"
+                className="text-xs text-muted-foreground hover:text-primary underline self-start"
+                onClick={() => setIsForgotPassword(true)}
+              >
+                Esqueci minha senha
+              </button>
+            )}
 
             {!isLogin && (
               <div className="flex items-start gap-2">
@@ -175,9 +204,15 @@ export default function AuthPage() {
         </form>
 
         <CardFooter className="justify-center">
-          <button type="button" className="text-sm text-muted-foreground hover:text-primary" onClick={() => setIsLogin(!isLogin)}>
-            {isLogin ? "Não tem conta? Cadastre-se" : "Já tem conta? Entre"}
-          </button>
+          {isForgotPassword ? (
+            <button type="button" className="text-sm text-muted-foreground hover:text-primary" onClick={() => setIsForgotPassword(false)}>
+              Voltar ao login
+            </button>
+          ) : (
+            <button type="button" className="text-sm text-muted-foreground hover:text-primary" onClick={() => setIsLogin(!isLogin)}>
+              {isLogin ? "Não tem conta? Cadastre-se" : "Já tem conta? Entre"}
+            </button>
+          )}
         </CardFooter>
       </Card>
     </div>

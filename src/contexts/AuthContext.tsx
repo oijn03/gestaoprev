@@ -44,7 +44,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .eq("user_id", userId)
         .single();
 
-      if (profileError) console.error("Error fetching profile:", profileError);
+      if (profileError) {
+        console.error("Error fetching profile:", profileError);
+      } else if (profileData) {
+        setProfile(profileData as Profile);
+      }
 
       const { data: roleData, error: roleError } = await supabase
         .from("user_roles")
@@ -52,10 +56,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .eq("user_id", userId)
         .single();
 
-      if (roleError) console.error("Error fetching role:", roleError);
-
-      if (profileData) setProfile(profileData as Profile);
-      if (roleData) setRole(roleData.role as AppRole);
+      if (roleError) {
+        console.error("Error fetching role:", roleError);
+      } else if (roleData) {
+        setRole(roleData.role as AppRole);
+      }
     } catch (err) {
       console.error("Unexpected error in fetchProfile:", err);
     }
@@ -93,32 +98,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [session, signOut]);
 
+  // Listen for auth changes
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
+      (_event, session) => {
         setSession(session);
         setUser(session?.user ?? null);
-        if (session?.user) {
-          await fetchProfile(session.user.id);
-        } else {
+        if (!session) {
           setProfile(null);
           setRole(null);
+          setLoading(false);
         }
-        setLoading(false);
       }
     );
 
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
-      if (session?.user) {
-        await fetchProfile(session.user.id);
-      }
-      setLoading(false);
+      if (!session) setLoading(false);
     });
 
     return () => subscription.unsubscribe();
-  }, [fetchProfile]);
+  }, []);
+
+  // Fetch profile when user changes
+  useEffect(() => {
+    if (user?.id) {
+      setLoading(true);
+      fetchProfile(user.id).finally(() => setLoading(false));
+    }
+  }, [user?.id, fetchProfile]);
 
   return (
     <AuthContext.Provider value={{ session, user, profile, role, loading, signOut, refreshProfile }}>

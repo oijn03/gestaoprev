@@ -1,37 +1,49 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { FileText, ClipboardList, CheckCircle, Clock } from "lucide-react";
+import { FileText, ClipboardList, CheckCircle, Clock, Loader2 } from "lucide-react";
 
 export function EspecialistaDashboard() {
   const { user } = useAuth();
-  const [stats, setStats] = useState({ requests: 0, reports: 0, completed: 0, pending: 0 });
 
-  useEffect(() => {
-    if (!user) return;
-    const fetchStats = async () => {
-      const { count: requests } = await supabase.from("case_requests").select("*", { count: "exact", head: true }).eq("especialista_id", user.id);
-      const { count: reports } = await supabase.from("reports").select("*", { count: "exact", head: true }).eq("author_id", user.id);
-      const { count: completed } = await supabase.from("reports").select("*", { count: "exact", head: true }).eq("author_id", user.id).eq("status", "finalizado");
-      const { count: pending } = await supabase.from("case_requests").select("*", { count: "exact", head: true }).eq("especialista_id", user.id).eq("status", "pendente");
+  const { data: stats, isLoading } = useQuery({
+    queryKey: ["especialista-stats", user?.id],
+    queryFn: async () => {
+      if (!user) return null;
 
-      setStats({
-        requests: requests || 0,
-        reports: reports || 0,
-        completed: completed || 0,
-        pending: pending || 0,
-      });
-    };
-    fetchStats();
-  }, [user]);
+      const [requestsRes, reportsRes, completedRes, pendingRes] = await Promise.all([
+        supabase.from("case_requests").select("*", { count: "exact", head: true }).eq("especialista_id", user.id),
+        supabase.from("reports").select("*", { count: "exact", head: true }).eq("author_id", user.id),
+        supabase.from("reports").select("*", { count: "exact", head: true }).eq("author_id", user.id).eq("status", "finalizado"),
+        supabase.from("case_requests").select("*", { count: "exact", head: true }).eq("especialista_id", user.id).eq("status", "pendente"),
+      ]);
+
+      return {
+        requests: requestsRes.count || 0,
+        reports: reportsRes.count || 0,
+        completed: completedRes.count || 0,
+        pending: pendingRes.count || 0,
+      };
+    },
+    enabled: !!user,
+  });
 
   const cards = [
-    { title: "Laudos Solicitados", value: stats.requests, icon: ClipboardList, color: "text-primary" },
-    { title: "Laudos Elaborados", value: stats.reports, icon: FileText, color: "text-primary" },
-    { title: "Finalizados", value: stats.completed, icon: CheckCircle, color: "text-success" },
-    { title: "Pendentes", value: stats.pending, icon: Clock, color: "text-warning" },
+    { title: "Laudos Solicitados", value: stats?.requests ?? 0, icon: ClipboardList, color: "text-primary" },
+    { title: "Laudos Elaborados", value: stats?.reports ?? 0, icon: FileText, color: "text-primary" },
+    { title: "Finalizados", value: stats?.completed ?? 0, icon: CheckCircle, color: "text-success" },
+    { title: "Pendentes", value: stats?.pending ?? 0, icon: Clock, color: "text-warning" },
   ];
+
+  if (isLoading) {
+    return (
+      <div className="flex h-48 items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <span className="ml-2 text-muted-foreground">Carregando estatísticas...</span>
+      </div>
+    );
+  }
 
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

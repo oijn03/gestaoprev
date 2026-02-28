@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Bell, Check, CheckCheck } from "lucide-react";
+import { Bell, Check, CheckCheck, Loader2 } from "lucide-react";
 
 interface Notification {
   id: string;
@@ -17,38 +18,56 @@ interface Notification {
 
 export default function Notifications() {
   const { user } = useAuth();
-  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const queryClient = useQueryClient();
 
-  const fetchNotifications = async () => {
-    if (!user) return;
-    const { data } = await supabase.from("notifications").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
-    if (data) setNotifications(data as Notification[]);
-  };
+  const { data: notifications, isLoading } = useQuery({
+    queryKey: ["notifications", user?.id],
+    queryFn: async () => {
+      if (!user) return [];
+      const { data, error } = await supabase
+        .from("notifications")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      return data as Notification[];
+    },
+    enabled: !!user,
+  });
 
   useEffect(() => {
-    fetchNotifications();
+    if (!user) return;
 
-    // Realtime subscription
     const channel = supabase
       .channel("notifications-realtime")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications" }, () => {
-        fetchNotifications();
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter: `user_id=eq.${user.id}` }, () => {
+        queryClient.invalidateQueries({ queryKey: ["notifications", user.id] });
       })
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [user]);
+  }, [user, queryClient]);
 
   const markAsRead = async (id: string) => {
     await supabase.from("notifications").update({ read: true }).eq("id", id);
-    fetchNotifications();
+    queryClient.invalidateQueries({ queryKey: ["notifications", user?.id] });
   };
 
   const markAllRead = async () => {
     if (!user) return;
     await supabase.from("notifications").update({ read: true }).eq("user_id", user.id).eq("read", false);
-    fetchNotifications();
+    queryClient.invalidateQueries({ queryKey: ["notifications", user.id] });
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex h-64 flex-col items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <p className="mt-2 text-muted-foreground">Carregando notificações...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -63,7 +82,7 @@ export default function Notifications() {
       </div>
 
       <div className="space-y-3">
-        {notifications.length === 0 ? (
+        {!notifications || notifications.length === 0 ? (
           <Card>
             <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
               <Bell className="mb-2 h-8 w-8" />

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,9 +10,19 @@ import { Settings } from "lucide-react";
 
 export default function SettingsPage() {
   const { profile, user, refreshProfile } = useAuth();
-  const [fullName, setFullName] = useState(profile?.full_name || "");
-  const [phone, setPhone] = useState(profile?.phone || "");
+  // Bug #5 fix: initialise with empty strings; sync via useEffect
+  // when profile loads asynchronously after mount
+  const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (profile) {
+      setFullName(profile.full_name || "");
+      setPhone(profile.phone || "");
+    }
+  }, [profile]);
+
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
