@@ -418,6 +418,7 @@ export type Database = {
           case_request_id: string
           content: string | null
           created_at: string
+          file_path: string | null
           id: string
           status: string
           title: string
@@ -429,6 +430,7 @@ export type Database = {
           case_request_id: string
           content?: string | null
           created_at?: string
+          file_path?: string | null
           id?: string
           status?: string
           title: string
@@ -440,6 +442,7 @@ export type Database = {
           case_request_id?: string
           content?: string | null
           created_at?: string
+          file_path?: string | null
           id?: string
           status?: string
           title?: string
