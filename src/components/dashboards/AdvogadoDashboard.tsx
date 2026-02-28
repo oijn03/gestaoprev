@@ -8,7 +8,13 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid
 } from "recharts";
 
-const COLORS = ["#0088FE", "#00C49F", "#FFBB28", "#FF8042", "#8884d8"];
+const COLORS = [
+  "hsl(224, 76%, 40%)",  // primary
+  "hsl(160, 96%, 30%)",  // success
+  "hsl(38, 92%, 50%)",   // warning
+  "hsl(0, 84%, 60%)",    // destructive
+  "hsl(215, 16%, 47%)",  // muted-foreground
+];
 
 export function AdvogadoDashboard() {
   const { user } = useAuth();
@@ -146,7 +152,7 @@ export function AdvogadoDashboard() {
                   <XAxis dataKey="name" fontSize={12} tickLine={false} axisLine={false} />
                   <YAxis fontSize={12} tickLine={false} axisLine={false} />
                   <Tooltip cursor={{ fill: 'transparent' }} />
-                  <Bar dataKey="quantidade" fill="#8884d8" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="quantidade" fill="hsl(224, 76%, 40%)" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             ) : (

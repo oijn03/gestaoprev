@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,21 +13,11 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   Plus, FolderOpen, AlertTriangle, Clock, Search, Stethoscope,
-  History, FileText, CheckCircle2, Lock, Trash2, XCircle, Check
+  History, CheckCircle2, Lock, Trash2, XCircle, Check, MessageSquare
 } from "lucide-react";
 import { toast } from "sonner";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { addMinutes, isBefore, startOfMinute, format } from "date-fns";
-import { ptBR } from "date-fns/locale";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Send, MessageSquare } from "lucide-react";
+import { startOfMinute, isBefore } from "date-fns";
+import CaseHub from "@/components/CaseHub";
 
 interface Case {
   id: string;
@@ -41,31 +32,13 @@ interface Case {
   created_at: string;
 }
 
-interface TimelineEvent {
-  id: string;
-  type: 'creation' | 'request' | 'acceptance' | 'document';
-  title: string;
-  description: string;
-  date: string;
-  icon: any;
-}
-
-interface CaseMessage {
-  id: string;
-  case_id: string;
-  sender_id: string;
-  content: string;
-  created_at: string;
-  sender_name?: string;
-}
-
 const statusColors: Record<string, string> = {
   aberto: "bg-primary/10 text-primary",
   em_andamento: "bg-warning/10 text-warning",
   aguardando_medico: "bg-warning/10 text-warning",
   aguardando_laudo: "bg-warning/10 text-warning",
   em_agendamento: "bg-primary/10 text-primary",
-  em_ajuste: "bg-purple-500/10 text-purple-500",
+  em_ajuste: "bg-accent text-accent-foreground",
   solicitando_ajuste: "bg-destructive/10 text-destructive",
   solicitando_cancelamento: "bg-destructive/10 text-destructive font-bold animate-pulse",
   concluido: "bg-success/10 text-success",
@@ -82,263 +55,54 @@ const priorityColors: Record<string, string> = {
 export default function Cases() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const [cases, setCases] = useState<Case[]>([]);
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [requestDialogOpen, setRequestDialogOpen] = useState(false);
   const [selectedCase, setSelectedCase] = useState<Case | null>(null);
-  const [doctors, setDoctors] = useState<{ id: string; full_name: string }[]>([]);
-
-  const [form, setForm] = useState({ title: "", patient_name: "", patient_cpf: "", process_number: "", description: "", priority: "normal", deadline: "" });
-  const [requestForm, setRequestForm] = useState({ medico_id: "", type: "prova_tecnica", deadline: "", description: "" });
   const [editingRequestId, setEditingRequestId] = useState<string | null>(null);
   const [currentRequestStatus, setCurrentRequestStatus] = useState<string | null>(null);
   const [cancelRequestedBy, setCancelRequestedBy] = useState<string | null>(null);
-  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
-  const [messages, setMessages] = useState<CaseMessage[]>([]);
-  const [newMessage, setNewMessage] = useState("");
-  const [isTimelineOpen, setIsTimelineOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState("timeline");
+
+  // CaseHub state
+  const [hubOpen, setHubOpen] = useState(false);
+  const [hubCaseId, setHubCaseId] = useState<string | null>(null);
+  const [hubCaseName, setHubCaseName] = useState("");
+
+  const [form, setForm] = useState({ title: "", patient_name: "", patient_cpf: "", process_number: "", description: "", priority: "normal", deadline: "" });
+  const [requestForm, setRequestForm] = useState({ medico_id: "", type: "prova_tecnica", deadline: "", description: "" });
   const [docFiles, setDocFiles] = useState<Record<string, File | null>>({
-    identificacao: null,
-    endereco: null,
-    laudos: null,
-    exames: null,
-    receitas: null,
+    identificacao: null, endereco: null, laudos: null, exames: null, receitas: null,
   });
 
-  const fetchCaseHistory = async (caseId: string) => {
-    setIsTimelineOpen(true);
-    setTimeline([]);
-
-    try {
-      const [
-        { data: caseData },
-        { data: requests },
-        { data: consultations },
-        { data: docs }
-      ] = await Promise.all([
-        supabase.from("cases").select("*").eq("id", caseId).single(),
-        supabase.from("case_requests").select("*").eq("case_id", caseId),
-        supabase.from("consultations").select("*, case_requests!inner(case_id)").eq("case_requests.case_id", caseId),
-        supabase.from("documents").select("*").eq("case_id", caseId)
-      ]);
-
-      const events: TimelineEvent[] = [];
-
-      if (caseData) {
-        events.push({
-          id: `creation-${caseData.id}`,
-          type: 'creation',
-          title: 'Caso Criado',
-          description: `O advogado iniciou o caso "${caseData.title}"`,
-          date: caseData.created_at,
-          icon: FolderOpen
-        });
-      }
-
-      requests?.forEach(req => {
-        events.push({
-          id: `req-${req.id}`,
-          type: 'request',
-          title: 'Solicitação de Perícia',
-          description: `Solicitada prova técnica do tipo "${req.type.replace(/_/g, ' ')}"`,
-          date: req.created_at,
-          icon: Stethoscope
-        });
-      });
-
-      consultations?.forEach(con => {
-        events.push({
-          id: `con-${con.id}`,
-          type: 'acceptance',
-          title: 'Solicitação Aceita',
-          description: `O médico aceitou o caso. Status: ${con.status}`,
-          date: con.created_at,
-          icon: CheckCircle2
-        });
-      });
-
-      docs?.forEach(doc => {
-        events.push({
-          id: `doc-${doc.id}`,
-          type: 'document',
-          title: 'Documento Anexado',
-          description: `Arquivo "${doc.file_name}" enviado (${doc.description || 'Geral'})`,
-          date: doc.created_at,
-          icon: FileText
-        });
-      });
-
-      setTimeline(events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
-      fetchMessages(caseId);
-    } catch (err) {
-      toast.error("Erro ao carregar histórico");
-    }
-  };
-
-  const fetchMessages = async (caseId: string) => {
-    const { data, error } = await supabase
-      .from("case_messages")
-      .select(`
-        *,
-        profiles:sender_id (
-          full_name
-        )
-      `)
-      .eq("case_id", caseId)
-      .order("created_at", { ascending: true });
-
-    if (error) {
-      console.error("Erro ao buscar mensagens:", error);
-      return;
-    }
-
-    const formattedMessages = data.map((m: any) => ({
-      ...m,
-      sender_name: m.profiles?.full_name || "Usuário"
-    }));
-
-    setMessages(formattedMessages);
-  };
-
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newMessage.trim() || !selectedCase || !user) return;
-
-    const { error } = await supabase.from("case_messages").insert({
-      case_id: selectedCase.id,
-      sender_id: user.id,
-      content: newMessage.trim()
-    });
-
-    if (error) {
-      toast.error("Erro ao enviar mensagem: " + error.message);
-      console.error("Chat Send Error:", error);
-    } else {
-      setNewMessage("");
-      if (selectedCase?.id) fetchMessages(selectedCase.id);
-    }
-  };
-
-  useEffect(() => {
-    if (!selectedCase || !isTimelineOpen) return;
-
-    const channel = supabase
-      .channel(`case-chat-${selectedCase.id}`)
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "case_messages", filter: `case_id=eq.${selectedCase.id}` },
-        () => fetchMessages(selectedCase.id)
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [selectedCase, isTimelineOpen]);
-
-  const handleRequestAdjustment = async () => {
-    if (!editingRequestId || !selectedCase) return;
-
-    try {
-      const { data: reqData } = await supabase
-        .from("case_requests")
-        .select("medico_id")
-        .eq("id", editingRequestId)
-        .single();
-
-      const { error } = await supabase
-        .from("case_requests")
-        .update({ status: "solicitando_ajuste" })
-        .eq("id", editingRequestId);
-
+  // Fetch cases with useQuery
+  const { data: cases = [] } = useQuery({
+    queryKey: ["cases", user?.id],
+    queryFn: async () => {
+      if (!user) return [];
+      const { data, error } = await supabase.from("cases").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
       if (error) throw error;
+      return data as Case[];
+    },
+    enabled: !!user,
+  });
 
-      if (reqData?.medico_id) {
-        await supabase.rpc("notify_user_fn", {
-          p_user_id: reqData.medico_id,
-          p_title: "Solicitação de Alteração",
-          p_message: `O advogado solicitou alterações na prova técnica do caso "${selectedCase?.title}". Acesse Solicitações para revisar.`,
-          p_type: "warning",
-          p_link: "/solicitacoes",
-        });
-      }
-
-      toast.success("Solicitação de alteração enviada ao médico!");
-      setCurrentRequestStatus("solicitando_ajuste");
-      fetchCases();
-    } catch (error: any) {
-      toast.error("Erro ao solicitar alteração: " + error.message);
-    }
-  };
+  // Fetch doctors
+  const { data: doctors = [] } = useQuery({
+    queryKey: ["doctors-list"],
+    queryFn: async () => {
+      const { data: roleRecords } = await supabase.from("user_roles").select("user_id").eq("role", "medico_generalista");
+      if (!roleRecords?.length) return [];
+      const { data: profileRecords } = await supabase.from("profiles").select("user_id, full_name").in("user_id", roleRecords.map(r => r.user_id));
+      return profileRecords?.map(d => ({ id: d.user_id, full_name: d.full_name })) || [];
+    },
+  });
 
   const isLocked = currentRequestStatus !== null &&
     currentRequestStatus !== "pendente" &&
     currentRequestStatus !== "em_ajuste" &&
     currentRequestStatus !== "solicitando_cancelamento";
 
-  const handleDeleteRequest = async () => {
-    if (!editingRequestId || !selectedCase) return;
-    if (!confirm("Tem certeza que deseja excluir esta solicitação permanentemente?")) return;
-
-    try {
-      const { error } = await supabase.from("case_requests").delete().eq("id", editingRequestId);
-      if (error) throw error;
-      toast.success("Solicitação excluída com sucesso!");
-      setRequestDialogOpen(false);
-      fetchCases();
-    } catch (error: any) {
-      toast.error("Erro ao excluir: " + error.message);
-    }
-  };
-
-  const handleCancelRequest = async (confirmAction: boolean = false) => {
-    if (!editingRequestId || !selectedCase) return;
-
-    try {
-      if (confirmAction) {
-        const { error } = await supabase.from("case_requests").delete().eq("id", editingRequestId);
-        if (error) throw error;
-        toast.success("Solicitação cancelada e removida com sucesso!");
-
-        if (requestForm.medico_id) {
-          await supabase.rpc("notify_user_fn", {
-            p_user_id: requestForm.medico_id,
-            p_title: "Cancelamento Confirmado",
-            p_message: `O advogado aceitou o cancelamento da solicitação do caso "${selectedCase.title}".`,
-            p_type: "info",
-          });
-        }
-      } else {
-        const { error } = await supabase
-          .from("case_requests")
-          .update({
-            status: "solicitando_cancelamento",
-            cancel_requested_by: user!.id
-          })
-          .eq("id", editingRequestId);
-        if (error) throw error;
-
-        toast.success("Pedido de cancelamento enviado! Aguardando confirmação do médico.");
-
-        if (requestForm.medico_id) {
-          await supabase.rpc("notify_user_fn", {
-            p_user_id: requestForm.medico_id,
-            p_title: "Pedido de Cancelamento",
-            p_message: `O advogado solicitou o cancelamento da prova técnica do caso "${selectedCase.title}". Acesse Solicitações para confirmar.`,
-            p_type: "warning",
-            p_link: "/solicitacoes",
-          });
-        }
-      }
-
-      setRequestDialogOpen(false);
-      fetchCases();
-    } catch (error: any) {
-      toast.error("Erro no cancelamento: " + error.message);
-    }
-  };
+  const canSubmit = requestForm.medico_id && requestForm.deadline && docFiles.identificacao && docFiles.endereco;
 
   const docCategories = [
     { id: "identificacao", label: "Documento de Identificação (com CPF)", required: true },
@@ -348,66 +112,77 @@ export default function Cases() {
     { id: "receitas", label: "Receitas Prévias", required: false },
   ];
 
-  const canSubmit = requestForm.medico_id &&
-    requestForm.deadline &&
-    docFiles.identificacao &&
-    docFiles.endereco;
+  // Create case mutation
+  const createCaseMutation = useMutation({
+    mutationFn: async (formData: typeof form) => {
+      if (!user) throw new Error("Usuário não autenticado");
+      const { error } = await supabase.from("cases").insert({
+        user_id: user.id, title: formData.title, patient_name: formData.patient_name,
+        patient_cpf: formData.patient_cpf || null, process_number: formData.process_number || null,
+        description: formData.description || null, priority: formData.priority, deadline: formData.deadline || null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Caso criado com sucesso!");
+      setDialogOpen(false);
+      setForm({ title: "", patient_name: "", patient_cpf: "", process_number: "", description: "", priority: "normal", deadline: "" });
+      queryClient.invalidateQueries({ queryKey: ["cases"] });
+    },
+    onError: (err: any) => toast.error(err.message),
+  });
 
-  const fetchCases = async () => {
-    if (!user) return;
-    const { data } = await supabase.from("cases").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
-    if (data) setCases(data as Case[]);
-  };
-
-  const fetchDoctors = async () => {
-    try {
-      const { data: roleRecords } = await supabase
-        .from("user_roles")
-        .select("user_id")
-        .eq("role", "medico_generalista");
-
-      if (!roleRecords || roleRecords.length === 0) {
-        setDoctors([]);
-        return;
+  // Create/update request mutation
+  const createRequestMutation = useMutation({
+    mutationFn: async (data: typeof requestForm & { case_id: string }) => {
+      let request;
+      if (editingRequestId) {
+        const { data: updated, error } = await supabase.from("case_requests")
+          .update({ medico_id: data.medico_id, type: data.type, deadline: data.deadline, description: data.description })
+          .eq("id", editingRequestId).select().single();
+        if (error) throw error;
+        request = updated;
+      } else {
+        const { data: created, error } = await supabase.from("case_requests").insert({
+          case_id: data.case_id, advogado_id: user!.id, medico_id: data.medico_id,
+          type: data.type, status: "pendente", deadline: data.deadline, description: data.description,
+        }).select().single();
+        if (error) throw error;
+        request = created;
       }
 
-      const { data: profileRecords } = await supabase
-        .from("profiles")
-        .select("user_id, full_name")
-        .in("user_id", roleRecords.map(r => r.user_id));
-
-      if (profileRecords) {
-        setDoctors(profileRecords.map(d => ({ id: d.user_id, full_name: d.full_name })));
+      // Upload documents
+      for (const [category, file] of Object.entries(docFiles)) {
+        if (!file) continue;
+        const fileExt = file.name.split('.').pop();
+        const fileName = `${data.case_id}/${category}_${Math.random().toString(36).slice(2)}.${fileExt}`;
+        const filePath = `documents/${fileName}`;
+        const { error: uploadError } = await supabase.storage.from("case-documents").upload(filePath, file);
+        if (uploadError) continue;
+        await supabase.from("documents").insert({
+          case_id: data.case_id, file_name: file.name, file_path: filePath,
+          file_type: file.type, file_size: file.size, description: category, uploaded_by: user!.id,
+        });
       }
-    } catch (err) {
-      console.error("Erro ao buscar médicos:", err);
-    }
-  };
 
-  useEffect(() => {
-    fetchCases();
-    fetchDoctors();
-  }, [user]);
-
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user) return;
-    const { error } = await supabase.from("cases").insert({
-      user_id: user.id,
-      title: form.title,
-      patient_name: form.patient_name,
-      patient_cpf: form.patient_cpf || null,
-      process_number: form.process_number || null,
-      description: form.description || null,
-      priority: form.priority,
-      deadline: form.deadline || null,
-    });
-    if (error) { toast.error(error.message); return; }
-    toast.success("Caso criado com sucesso!");
-    setDialogOpen(false);
-    setForm({ title: "", patient_name: "", patient_cpf: "", process_number: "", description: "", priority: "normal", deadline: "" });
-    fetchCases();
-  };
+      // Notify doctor
+      if (!editingRequestId) {
+        await supabase.rpc("notify_user_fn", {
+          p_user_id: data.medico_id,
+          p_title: "Nova Solicitação",
+          p_message: `O advogado solicitou uma nova prova técnica para o caso "${selectedCase?.title}".`,
+          p_type: "info", p_link: "/solicitacoes",
+        });
+      }
+      return request;
+    },
+    onSuccess: () => {
+      toast.success(editingRequestId ? "Solicitação atualizada!" : "Solicitação enviada!");
+      setRequestDialogOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["cases"] });
+    },
+    onError: (err: any) => toast.error("Erro: " + err.message),
+  });
 
   const handleOpenEditRequest = async (c: Case) => {
     setSelectedCase(c);
@@ -417,115 +192,91 @@ export default function Cases() {
     setRequestForm({ medico_id: "", type: "prova_tecnica", deadline: "", description: "" });
     setDocFiles({ identificacao: null, endereco: null, laudos: null, exames: null, receitas: null });
 
-    const { data: request } = await supabase
-      .from("case_requests")
-      .select("*")
-      .eq("case_id", c.id)
-      .maybeSingle();
-
+    const { data: request } = await supabase.from("case_requests").select("*").eq("case_id", c.id).maybeSingle();
     if (request) {
       setEditingRequestId(request.id);
       setCurrentRequestStatus(request.status);
       setCancelRequestedBy(request.cancel_requested_by);
       setRequestForm({
-        medico_id: request.medico_id || "",
-        type: request.type,
-        deadline: request.deadline ? request.deadline.slice(0, 16) : "",
-        description: request.description || "",
+        medico_id: request.medico_id || "", type: request.type,
+        deadline: request.deadline ? request.deadline.slice(0, 16) : "", description: request.description || "",
       });
     }
-
     setRequestDialogOpen(true);
   };
-
-  const createRequestMutation = useMutation({
-    mutationFn: async (data: typeof requestForm & { case_id: string }) => {
-      let request;
-
-      if (editingRequestId) {
-        const { data: updated, error: updateError } = await supabase
-          .from("case_requests")
-          .update({
-            medico_id: data.medico_id,
-            type: data.type,
-            deadline: data.deadline,
-            description: data.description,
-          })
-          .eq("id", editingRequestId)
-          .select()
-          .single();
-
-        if (updateError) throw updateError;
-        request = updated;
-      } else {
-        const { data: created, error: reqError } = await supabase.from("case_requests").insert({
-          case_id: data.case_id,
-          advogado_id: user!.id,
-          medico_id: data.medico_id,
-          type: data.type,
-          status: "pendente",
-          deadline: data.deadline,
-          description: data.description,
-        }).select().single();
-
-        if (reqError) throw reqError;
-        request = created;
-      }
-
-      for (const [category, file] of Object.entries(docFiles)) {
-        if (!file) continue;
-        const fileExt = file.name.split('.').pop();
-        const fileName = `${data.case_id}/${category}_${Math.random().toString(36).slice(2)}.${fileExt}`;
-        const filePath = `documents/${fileName}`;
-
-        const { error: uploadError } = await supabase.storage.from("case-documents").upload(filePath, file);
-        if (uploadError) continue;
-
-        await supabase.from("documents").insert({
-          case_id: data.case_id,
-          file_name: file.name,
-          file_path: filePath,
-          file_type: file.type,
-          file_size: file.size,
-          description: category,
-          uploaded_by: user!.id
-        });
-      }
-
-      if (!editingRequestId) {
-        await supabase.rpc("notify_user_fn", {
-          p_user_id: data.medico_id,
-          p_title: "Nova Solicitação",
-          p_message: `O advogado solicitou uma nova prova técnica para o caso "${selectedCase?.title}".`,
-          p_type: "info",
-          p_link: "/solicitacoes",
-        });
-      }
-
-      return request;
-    },
-    onSuccess: () => {
-      toast.success(editingRequestId ? "Solicitação atualizada!" : "Solicitação enviada!");
-      setRequestDialogOpen(false);
-      fetchCases();
-    },
-    onError: (error: any) => {
-      toast.error("Erro ao salvar solicitação: " + error.message);
-    }
-  });
 
   const handleCreateRequest = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedCase) return;
     if (requestForm.deadline) {
       const deadlineDate = new Date(requestForm.deadline);
-      const now = startOfMinute(new Date());
-      if (isBefore(deadlineDate, now)) {
+      if (isBefore(deadlineDate, startOfMinute(new Date()))) {
         toast.error("O prazo não pode ser uma data retroativa");
         return;
       }
     }
     createRequestMutation.mutate({ ...requestForm, case_id: selectedCase.id });
+  };
+
+  const handleRequestAdjustment = async () => {
+    if (!editingRequestId || !selectedCase) return;
+    try {
+      const { data: reqData } = await supabase.from("case_requests").select("medico_id").eq("id", editingRequestId).single();
+      const { error } = await supabase.from("case_requests").update({ status: "solicitando_ajuste" }).eq("id", editingRequestId);
+      if (error) throw error;
+      if (reqData?.medico_id) {
+        await supabase.rpc("notify_user_fn", {
+          p_user_id: reqData.medico_id, p_title: "Solicitação de Alteração",
+          p_message: `O advogado solicitou alterações na prova técnica do caso "${selectedCase.title}".`,
+          p_type: "warning", p_link: "/solicitacoes",
+        });
+      }
+      toast.success("Solicitação de alteração enviada ao médico!");
+      setCurrentRequestStatus("solicitando_ajuste");
+      queryClient.invalidateQueries({ queryKey: ["cases"] });
+    } catch (error: any) { toast.error("Erro: " + error.message); }
+  };
+
+  const handleDeleteRequest = async () => {
+    if (!editingRequestId) return;
+    if (!confirm("Tem certeza que deseja excluir esta solicitação?")) return;
+    try {
+      const { error } = await supabase.from("case_requests").delete().eq("id", editingRequestId);
+      if (error) throw error;
+      toast.success("Solicitação excluída!");
+      setRequestDialogOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["cases"] });
+    } catch (error: any) { toast.error("Erro: " + error.message); }
+  };
+
+  const handleCancelRequest = async (confirmAction: boolean = false) => {
+    if (!editingRequestId || !selectedCase) return;
+    try {
+      if (confirmAction) {
+        const { error } = await supabase.from("case_requests").delete().eq("id", editingRequestId);
+        if (error) throw error;
+        toast.success("Solicitação cancelada!");
+        if (requestForm.medico_id) {
+          await supabase.rpc("notify_user_fn", {
+            p_user_id: requestForm.medico_id, p_title: "Cancelamento Confirmado",
+            p_message: `O advogado aceitou o cancelamento do caso "${selectedCase.title}".`, p_type: "info",
+          });
+        }
+      } else {
+        const { error } = await supabase.from("case_requests").update({ status: "solicitando_cancelamento", cancel_requested_by: user!.id }).eq("id", editingRequestId);
+        if (error) throw error;
+        toast.success("Pedido de cancelamento enviado!");
+        if (requestForm.medico_id) {
+          await supabase.rpc("notify_user_fn", {
+            p_user_id: requestForm.medico_id, p_title: "Pedido de Cancelamento",
+            p_message: `O advogado solicitou cancelamento do caso "${selectedCase.title}".`,
+            p_type: "warning", p_link: "/solicitacoes",
+          });
+        }
+      }
+      setRequestDialogOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["cases"] });
+    } catch (error: any) { toast.error("Erro: " + error.message); }
   };
 
   const filtered = cases.filter((c) =>
@@ -546,7 +297,7 @@ export default function Cases() {
           </DialogTrigger>
           <DialogContent className="max-w-lg">
             <DialogHeader><DialogTitle>Criar Novo Caso</DialogTitle></DialogHeader>
-            <form onSubmit={handleCreate} className="space-y-4">
+            <form onSubmit={(e) => { e.preventDefault(); createCaseMutation.mutate(form); }} className="space-y-4">
               <div className="space-y-2">
                 <Label>Título do Caso</Label>
                 <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required maxLength={200} />
@@ -586,7 +337,9 @@ export default function Cases() {
                 <Label>Descrição</Label>
                 <Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} maxLength={2000} rows={3} />
               </div>
-              <Button type="submit" className="w-full min-h-[44px]">Criar Caso</Button>
+              <Button type="submit" className="w-full min-h-[44px]" disabled={createCaseMutation.isPending}>
+                {createCaseMutation.isPending ? "Criando..." : "Criar Caso"}
+              </Button>
             </form>
           </DialogContent>
         </Dialog>
@@ -628,14 +381,10 @@ export default function Cases() {
                   </TableCell>
                   <TableCell className="hidden md:table-cell">{c.patient_name}</TableCell>
                   <TableCell>
-                    <Badge variant="secondary" className={statusColors[c.status] || ""}>
-                      {c.status.replace(/_/g, " ")}
-                    </Badge>
+                    <Badge variant="secondary" className={statusColors[c.status] || ""}>{c.status.replace(/_/g, " ")}</Badge>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="secondary" className={priorityColors[c.priority] || ""}>
-                      {c.priority}
-                    </Badge>
+                    <Badge variant="secondary" className={priorityColors[c.priority] || ""}>{c.priority}</Badge>
                   </TableCell>
                   <TableCell className="hidden lg:table-cell">
                     {c.deadline ? (
@@ -646,8 +395,8 @@ export default function Cases() {
                     ) : "—"}
                   </TableCell>
                   <TableCell className="text-right flex justify-end gap-2">
-                    <Button variant="ghost" size="sm" onClick={() => { setSelectedCase(c); fetchCaseHistory(c.id); }}>
-                      <History className="mr-2 h-4 w-4" />Histórico / Chat
+                    <Button variant="ghost" size="sm" onClick={() => { setHubCaseId(c.id); setHubCaseName(c.patient_name); setHubOpen(true); }}>
+                      <MessageSquare className="mr-2 h-4 w-4" />Hub
                     </Button>
                     <Button variant="ghost" size="sm" onClick={() => handleOpenEditRequest(c)}>
                       <Stethoscope className="mr-2 h-4 w-4" />
@@ -661,50 +410,36 @@ export default function Cases() {
         </CardContent>
       </Card>
 
+      {/* Request Dialog */}
       <Dialog open={requestDialogOpen} onOpenChange={setRequestDialogOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>{editingRequestId ? "Ver/Editar Solicitação" : "Solicitar Prova Técnica"}</DialogTitle>
             <DialogDescription>
-              {isLocked
-                ? "Esta solicitação está bloqueada para edição ou em processo de cancelamento."
-                : "Selecione um médico e defina o prazo para a perícia médica deste caso."}
+              {isLocked ? "Solicitação bloqueada para edição." : "Selecione um médico e defina o prazo para a perícia."}
             </DialogDescription>
           </DialogHeader>
-          <form key={requestDialogOpen ? `${selectedCase?.id}-open` : "closed"} onSubmit={handleCreateRequest} className="space-y-4">
+          <form onSubmit={handleCreateRequest} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="medico-select" className="flex items-center">
-                Médico Generalista {isLocked && <Lock className="ml-2 h-3 w-3 text-muted-foreground" />}
-              </Label>
+              <Label className="flex items-center">Médico Generalista {isLocked && <Lock className="ml-2 h-3 w-3 text-muted-foreground" />}</Label>
               <Select value={requestForm.medico_id} onValueChange={(v) => setRequestForm({ ...requestForm, medico_id: v })} disabled={isLocked}>
-                <SelectTrigger id="medico-select"><SelectValue placeholder="Selecione um médico..." /></SelectTrigger>
+                <SelectTrigger><SelectValue placeholder="Selecione um médico..." /></SelectTrigger>
                 <SelectContent>
-                  {doctors.map((doc) => (
-                    <SelectItem key={doc.id} value={doc.id}>{doc.full_name}</SelectItem>
-                  ))}
+                  {doctors.map((doc) => <SelectItem key={doc.id} value={doc.id}>{doc.full_name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
-
             <div className="space-y-2">
-              <Label htmlFor="pericia-type" className="flex items-center">
-                Tipo de Perícia {isLocked && <Lock className="ml-2 h-3 w-3 text-muted-foreground" />}
-              </Label>
-              <Input id="pericia-type" value={requestForm.type} onChange={(e) => setRequestForm({ ...requestForm, type: e.target.value })} required placeholder="Ex: Prova Técnica Previdenciária" disabled={isLocked} />
+              <Label className="flex items-center">Tipo de Perícia {isLocked && <Lock className="ml-2 h-3 w-3 text-muted-foreground" />}</Label>
+              <Input value={requestForm.type} onChange={(e) => setRequestForm({ ...requestForm, type: e.target.value })} required disabled={isLocked} />
             </div>
-
             <div className="space-y-2">
-              <Label htmlFor="prazo-esperado" className="flex items-center">
-                Prazo Esperado {isLocked && <Lock className="ml-2 h-3 w-3 text-muted-foreground" />}
-              </Label>
-              <Input id="prazo-esperado" type="datetime-local" value={requestForm.deadline} onChange={(e) => setRequestForm({ ...requestForm, deadline: e.target.value })} required disabled={isLocked} />
+              <Label className="flex items-center">Prazo Esperado {isLocked && <Lock className="ml-2 h-3 w-3 text-muted-foreground" />}</Label>
+              <Input type="datetime-local" value={requestForm.deadline} onChange={(e) => setRequestForm({ ...requestForm, deadline: e.target.value })} required disabled={isLocked} />
             </div>
-
             <div className="space-y-2">
-              <Label htmlFor="observacoes" className="flex items-center">
-                Observações {isLocked && <Lock className="ml-2 h-3 w-3 text-muted-foreground" />}
-              </Label>
-              <Textarea id="observacoes" value={requestForm.description} onChange={(e) => setRequestForm({ ...requestForm, description: e.target.value })} placeholder="Detalhes adicionais para o médico..." rows={3} disabled={isLocked} />
+              <Label className="flex items-center">Observações {isLocked && <Lock className="ml-2 h-3 w-3 text-muted-foreground" />}</Label>
+              <Textarea value={requestForm.description} onChange={(e) => setRequestForm({ ...requestForm, description: e.target.value })} rows={3} disabled={isLocked} />
             </div>
 
             {!editingRequestId && (
@@ -712,14 +447,9 @@ export default function Cases() {
                 <Label className="text-base font-semibold">Anexos Obrigatórios e Opcionais</Label>
                 <div className="grid gap-4 max-h-[300px] overflow-y-auto pr-2">
                   {docCategories.map((cat) => (
-                    <div key={cat.id} className="space-y-1.5 opacity-80">
+                    <div key={cat.id} className="space-y-1.5">
                       <Label className="text-xs">{cat.label} {cat.required && "*"}</Label>
-                      <Input
-                        type="file"
-                        onChange={(e) => setDocFiles({ ...docFiles, [cat.id]: e.target.files?.[0] || null })}
-                        required={cat.required}
-                        className="text-xs h-8"
-                      />
+                      <Input type="file" onChange={(e) => setDocFiles({ ...docFiles, [cat.id]: e.target.files?.[0] || null })} required={cat.required} className="text-xs h-8" />
                     </div>
                   ))}
                 </div>
@@ -732,13 +462,12 @@ export default function Cases() {
                   <Trash2 className="mr-2 h-4 w-4" /> Excluir
                 </Button>
               )}
-
               {isLocked || currentRequestStatus === "solicitando_cancelamento" ? (
                 <>
                   {currentRequestStatus === "solicitando_cancelamento" ? (
                     cancelRequestedBy === user?.id ? (
                       <Button type="button" variant="outline" className="w-full" disabled>
-                        <Clock className="mr-2 h-4 w-4" /> Aguardando Confirmação Médico
+                        <Clock className="mr-2 h-4 w-4" /> Aguardando Confirmação
                       </Button>
                     ) : (
                       <Button type="button" variant="destructive" className="w-full" onClick={() => handleCancelRequest(true)}>
@@ -766,86 +495,9 @@ export default function Cases() {
           </form>
         </DialogContent>
       </Dialog>
-      <Sheet open={isTimelineOpen} onOpenChange={setIsTimelineOpen}>
-        <SheetContent className="overflow-y-auto sm:max-w-md p-0">
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
-            <SheetHeader className="p-6 pb-0">
-              <SheetTitle>Gestão do Caso</SheetTitle>
-              <SheetDescription>Acompanhe eventos e converse com a equipe.</SheetDescription>
-              <TabsList className="grid w-full grid-cols-2 mt-4">
-                <TabsTrigger value="timeline" className="flex items-center gap-2">
-                  <History className="h-4 w-4" /> Histórico
-                </TabsTrigger>
-                <TabsTrigger value="chat" className="flex items-center gap-2">
-                  <MessageSquare className="h-4 w-4" /> Mensagens
-                </TabsTrigger>
-              </TabsList>
-            </SheetHeader>
 
-            <TabsContent value="timeline" className="flex-1 overflow-y-auto p-6 mt-0">
-              <div className="relative space-y-8 before:absolute before:inset-0 before:ml-5 before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-300 before:to-transparent">
-                {timeline.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-10">Nenhum histórico disponível.</p>
-                ) : timeline.map((event) => (
-                  <div key={event.id} className="relative flex items-start group">
-                    <div className="flex items-center justify-center w-10 h-10 rounded-full border bg-background shadow-sm shrink-0 z-10">
-                      <event.icon className="h-5 w-5 text-primary" />
-                    </div>
-                    <div className="ml-4 space-y-1 pt-1">
-                      <div className="flex items-center justify-between gap-4">
-                        <h4 className="font-semibold text-sm leading-none">{event.title}</h4>
-                        <time className="text-xs text-muted-foreground whitespace-nowrap">
-                          {format(new Date(event.date), "dd/MM 'às' HH:mm", { locale: ptBR })}
-                        </time>
-                      </div>
-                      <p className="text-sm text-muted-foreground line-clamp-2">{event.description}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </TabsContent>
-
-            <TabsContent value="chat" className="flex-1 flex flex-col h-full overflow-hidden mt-0">
-              <div className="flex-1 overflow-y-auto p-6 space-y-4">
-                {messages.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full text-muted-foreground space-y-2">
-                    <MessageSquare className="h-10 w-10 opacity-20" />
-                    <p>Inicie uma conversa técnica sobre este caso.</p>
-                  </div>
-                ) : (
-                  messages.map((m) => (
-                    <div key={m.id} className={`flex flex-col ${m.sender_id === user?.id ? "items-end" : "items-start"}`}>
-                      <div className={`max-w-[80%] rounded-lg p-3 text-sm ${m.sender_id === user?.id
-                        ? "bg-primary text-primary-foreground rounded-br-none"
-                        : "bg-muted text-foreground rounded-bl-none"
-                        }`}>
-                        <p className="font-bold text-[10px] mb-1 opacity-80 uppercase">{m.sender_name}</p>
-                        {m.content}
-                      </div>
-                      <time className="text-[10px] text-muted-foreground mt-1 px-1">
-                        {format(new Date(m.created_at), "HH:mm")}
-                      </time>
-                    </div>
-                  ))
-                )}
-              </div>
-              <div className="p-4 border-t bg-background">
-                <form onSubmit={handleSendMessage} className="flex gap-2">
-                  <Input
-                    placeholder="Escreva para o médico..."
-                    value={newMessage}
-                    onChange={(e) => setNewMessage(e.target.value)}
-                    className="flex-1"
-                  />
-                  <Button type="submit" size="icon" disabled={!newMessage.trim()}>
-                    <Send className="h-4 w-4" />
-                  </Button>
-                </form>
-              </div>
-            </TabsContent>
-          </Tabs>
-        </SheetContent>
-      </Sheet>
+      {/* CaseHub replaces the old duplicate Sheet */}
+      <CaseHub caseId={hubCaseId} caseName={hubCaseName} open={hubOpen} onOpenChange={setHubOpen} />
     </div>
   );
 }

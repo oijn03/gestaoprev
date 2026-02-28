@@ -129,7 +129,7 @@ export function MedicoDashboard() {
                   <XAxis dataKey="name" fontSize={11} tickLine={false} axisLine={false} interval={0} />
                   <YAxis fontSize={12} tickLine={false} axisLine={false} />
                   <Tooltip cursor={{ fill: 'transparent' }} />
-                  <Bar dataKey="quantidade" fill="#00C49F" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="quantidade" fill="hsl(160, 96%, 30%)" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             ) : (
@@ -157,7 +157,7 @@ export function MedicoDashboard() {
                 <Line
                   type="monotone"
                   dataKey="total"
-                  stroke="#8884d8"
+                  stroke="hsl(224, 76%, 40%)"
                   strokeWidth={2}
                   dot={{ r: 4 }}
                   activeDot={{ r: 6 }}
